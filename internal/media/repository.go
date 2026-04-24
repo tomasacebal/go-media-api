@@ -13,6 +13,7 @@ import "context"
 //   - Metadata encontrada o error.
 type Repository interface {
 	Create(ctx context.Context, file File) error
+	List(ctx context.Context, limit int) ([]File, error)
 	FindByID(ctx context.Context, id string) (File, error)
 	SoftDelete(ctx context.Context, id string) error
 }

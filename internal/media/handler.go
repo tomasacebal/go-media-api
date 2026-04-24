@@ -43,7 +43,10 @@ func NewHandler(service *Service, logger *log.Logger) *Handler {
 // Returns:
 //   - No retorna valores.
 func (h *Handler) RegisterRoutes(app *fiber.App) {
+	app.Get("/api/v1/media", h.List)
+
 	group := app.Group("/api/v1/media")
+	group.Get("/", h.List)
 	group.Post("/upload", h.Upload)
 	group.Get("/:id", h.Get)
 	group.Get("/:id/download", h.Download)
@@ -77,6 +80,24 @@ func (h *Handler) Upload(c *fiber.Ctx) error {
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
 		"data": file,
+	})
+}
+
+// List devuelve media activa para API y galeria web.
+//
+// Args:
+//   - c: contexto Fiber.
+//
+// Returns:
+//   - Respuesta JSON con lista de metadata o error.
+func (h *Handler) List(c *fiber.Ctx) error {
+	files, err := h.service.List(c.UserContext(), c.QueryInt("limit", 60))
+	if err != nil {
+		return writeError(c, err)
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"data": files,
 	})
 }
 

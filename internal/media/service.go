@@ -147,6 +147,24 @@ func (s *Service) Upload(ctx context.Context, header *multipart.FileHeader, inpu
 	return file, nil
 }
 
+// List devuelve metadata activa para galeria y clientes API.
+//
+// Args:
+//   - ctx: contexto de la operacion.
+//   - limit: cantidad maxima de resultados.
+//
+// Returns:
+//   - Lista de metadata activa o error controlado.
+func (s *Service) List(ctx context.Context, limit int) ([]File, error) {
+	limit = clampLimit(limit)
+	files, err := s.repo.List(ctx, limit)
+	if err != nil {
+		return nil, appError("media_list_failed", "No se pudo listar la metadata", err)
+	}
+
+	return files, nil
+}
+
 // Get devuelve metadata activa por id.
 //
 // Args:
@@ -317,6 +335,16 @@ func isWebP(data []byte) bool {
 	return len(data) >= 12 &&
 		string(data[0:4]) == "RIFF" &&
 		string(data[8:12]) == "WEBP"
+}
+
+func clampLimit(limit int) int {
+	if limit <= 0 {
+		return 60
+	}
+	if limit > 100 {
+		return 100
+	}
+	return limit
 }
 
 type validatedFile struct {

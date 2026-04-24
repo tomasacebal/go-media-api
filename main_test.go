@@ -9,12 +9,36 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/tomasacebal/go-media-api/internal/config"
 	"github.com/tomasacebal/go-media-api/internal/media"
 )
+
+func TestRootServesGallery(t *testing.T) {
+	app, cleanup := newTestApp(t, 1024*1024)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("root fallo: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("leer body fallo: %v", err)
+	}
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("status esperado 200, recibido %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), "Media Gallery") {
+		t.Fatal("root deberia servir la galeria")
+	}
+}
 
 func TestUploadValidImageReturnsMetadata(t *testing.T) {
 	app, cleanup := newTestApp(t, 1024*1024)
@@ -53,6 +77,34 @@ func TestUploadValidPDFReturnsMetadata(t *testing.T) {
 	payload := decodeData(t, resp.Body)
 	if payload.MIMEType != "application/pdf" {
 		t.Fatalf("mime esperado application/pdf, recibido %s", payload.MIMEType)
+	}
+}
+
+func TestListReturnsUploadedFiles(t *testing.T) {
+	app, cleanup := newTestApp(t, 1024*1024)
+	defer cleanup()
+
+	resp := uploadFile(t, app, "foto.png", validPNG(), map[string]string{"visibility": "public"})
+	defer resp.Body.Close()
+	uploaded := decodeData(t, resp.Body)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media", nil)
+	listResp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("list fallo: %v", err)
+	}
+	defer listResp.Body.Close()
+
+	if listResp.StatusCode != fiber.StatusOK {
+		t.Fatalf("status esperado 200, recibido %d", listResp.StatusCode)
+	}
+
+	files := decodeList(t, listResp.Body)
+	if len(files) != 1 {
+		t.Fatalf("cantidad esperada 1, recibida %d", len(files))
+	}
+	if files[0].ID != uploaded.ID {
+		t.Fatalf("id esperado %s, recibido %s", uploaded.ID, files[0].ID)
 	}
 }
 
@@ -218,6 +270,18 @@ func decodeData(t *testing.T, reader io.Reader) media.File {
 	}
 	if err := json.NewDecoder(reader).Decode(&payload); err != nil {
 		t.Fatalf("decode fallo: %v", err)
+	}
+	return payload.Data
+}
+
+func decodeList(t *testing.T, reader io.Reader) []media.File {
+	t.Helper()
+
+	var payload struct {
+		Data []media.File `json:"data"`
+	}
+	if err := json.NewDecoder(reader).Decode(&payload); err != nil {
+		t.Fatalf("decode list fallo: %v", err)
 	}
 	return payload.Data
 }

@@ -89,6 +89,44 @@ func (r *SQLiteRepository) Create(ctx context.Context, file File) error {
 	return nil
 }
 
+// List devuelve metadata activa ordenada por fecha de creacion.
+//
+// Args:
+//   - ctx: contexto de la operacion.
+//   - limit: cantidad maxima de resultados.
+//
+// Returns:
+//   - Lista de metadata activa o error.
+func (r *SQLiteRepository) List(ctx context.Context, limit int) ([]File, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, original_name, stored_name, mime_type, extension, size_bytes,
+			storage_driver, storage_path, public_url, visibility, title,
+			description, category, created_by, created_at, updated_at, deleted_at
+		FROM media_files
+		WHERE deleted_at IS NULL
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("listar metadata: %w", err)
+	}
+	defer rows.Close()
+
+	files := make([]File, 0)
+	for rows.Next() {
+		file, err := scanFile(rows)
+		if err != nil {
+			return nil, fmt.Errorf("leer fila de metadata: %w", err)
+		}
+		files = append(files, file)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterar metadata: %w", err)
+	}
+
+	return files, nil
+}
+
 // FindByID devuelve metadata activa por id.
 //
 // Args:

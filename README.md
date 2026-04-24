@@ -2,6 +2,8 @@
 
 API Go con Fiber para publicar y distribuir imagenes y PDFs.
 
+La raiz `/` sirve una galeria web para subir, listar, abrir y borrar assets desde el navegador.
+
 ## Variables de entorno
 
 | Variable | Default | Descripcion |
@@ -24,6 +26,7 @@ go build -o go-media-api.exe .
 - `POST /api/v1/media/upload`
   - Multipart field obligatorio: `file`.
   - Campos opcionales: `visibility`, `title`, `description`, `category`.
+- `GET /api/v1/media`
 - `GET /api/v1/media/:id`
 - `GET /api/v1/media/:id/download`
 - `DELETE /api/v1/media/:id`
