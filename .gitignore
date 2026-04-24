@@ -27,7 +27,11 @@ go.work.sum
 # env file
 .env
 
+# Local media storage
+/media/
+
 # Editor/IDE
 # .idea/
 .vscode/
 /.omx
+IMPLEMENTATION_PLAN.md
