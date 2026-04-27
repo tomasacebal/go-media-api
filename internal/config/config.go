@@ -67,7 +67,7 @@ type AuthConfig struct {
 // Returns:
 //   - Configuracion completa o error de validacion.
 func Load() (Config, error) {
-	if err := loadDotEnv(".env"); err != nil {
+	if err := loadDotEnvFiles(); err != nil {
 		return Config{}, err
 	}
 
@@ -137,13 +137,32 @@ func envPositiveInt(key string, fallback int) (int, error) {
 	return value, nil
 }
 
+func loadDotEnvFiles() error {
+	paths := []string{".env"}
+	executablePath, err := os.Executable()
+	if err == nil {
+		executableDotEnv := filepath.Join(filepath.Dir(executablePath), ".env")
+		if !samePath(".env", executableDotEnv) {
+			paths = append(paths, executableDotEnv)
+		}
+	}
+
+	for _, path := range paths {
+		if err := loadDotEnv(path); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func loadDotEnv(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("leer .env: %w", err)
+		return fmt.Errorf("leer %s: %w", path, err)
 	}
 	defer file.Close()
 
@@ -179,7 +198,7 @@ func loadDotEnv(path string) error {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("leer .env: %w", err)
+		return fmt.Errorf("leer %s: %w", path, err)
 	}
 
 	return nil
@@ -208,6 +227,15 @@ func parseDotEnvValue(value string, lineNumber int) (string, error) {
 		value = value[:commentIndex]
 	}
 	return strings.TrimSpace(value), nil
+}
+
+func samePath(left string, right string) bool {
+	leftAbs, leftErr := filepath.Abs(left)
+	rightAbs, rightErr := filepath.Abs(right)
+	if leftErr != nil || rightErr != nil {
+		return filepath.Clean(left) == filepath.Clean(right)
+	}
+	return strings.EqualFold(filepath.Clean(leftAbs), filepath.Clean(rightAbs))
 }
 
 func envNonNegativeInt(key string, fallback int) (int, error) {
