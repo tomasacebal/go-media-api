@@ -1,6 +1,132 @@
 package web
 
-// GalleryHTML devuelve la interfaz web de upload y galeria.
+// LoginHTML devuelve la pantalla de login.
+//
+// Args:
+//   - No recibe argumentos.
+//
+// Returns:
+//   - Documento HTML completo para autenticar la web.
+func LoginHTML() string {
+	return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login | go-media-api</title>
+  <style>
+    :root {
+      --bg: #eef3f0;
+      --panel: #ffffff;
+      --ink: #17211d;
+      --muted: #66736d;
+      --line: #d8e0dc;
+      --brand: #0f766e;
+      --danger: #b42318;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    form {
+      width: min(420px, 100%);
+      display: grid;
+      gap: 14px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 20px 50px rgba(23, 33, 29, 0.08);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.7rem;
+      letter-spacing: 0;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 11px 12px;
+      color: var(--ink);
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: #fff;
+      background: var(--brand);
+      cursor: pointer;
+      font: inherit;
+      font-weight: 800;
+    }
+
+    .message {
+      min-height: 20px;
+      color: var(--danger);
+      font-size: 0.92rem;
+    }
+  </style>
+</head>
+<body>
+  <form method="post" action="/login" id="loginForm">
+    <h1>go-media-api</h1>
+    <label>
+      Usuario
+      <input name="username" autocomplete="username" required />
+    </label>
+    <label>
+      Password
+      <input name="password" type="password" autocomplete="current-password" required />
+    </label>
+    <button type="submit">Ingresar</button>
+    <div class="message" id="message"></div>
+  </form>
+  <script>
+    const form = document.querySelector("#loginForm");
+    const message = document.querySelector("#message");
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      message.textContent = "";
+      const response = await fetch("/login", {
+        method: "POST",
+        body: new FormData(form)
+      });
+      if (response.ok) {
+        window.location.href = "/";
+        return;
+      }
+      const payload = await response.json().catch(() => ({}));
+      message.textContent = payload.error?.message || "No se pudo iniciar sesion";
+    });
+  </script>
+</body>
+</html>`
+}
+
+// GalleryHTML devuelve la interfaz web de upload, galeria y api keys.
 //
 // Args:
 //   - No recibe argumentos.
@@ -16,7 +142,6 @@ func GalleryHTML() string {
   <title>go-media-api</title>
   <style>
     :root {
-      color-scheme: light;
       --bg: #eef3f0;
       --panel: #ffffff;
       --ink: #17211d;
@@ -29,65 +154,44 @@ func GalleryHTML() string {
       --shadow: 0 20px 50px rgba(23, 33, 29, 0.08);
     }
 
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
 
     body {
       margin: 0;
       min-height: 100vh;
-      font-family: Georgia, "Times New Roman", serif;
       color: var(--ink);
-      background:
-        linear-gradient(135deg, rgba(15, 118, 110, 0.14), transparent 34%),
-        linear-gradient(315deg, rgba(151, 126, 68, 0.12), transparent 30%),
-        var(--bg);
+      background: var(--bg);
+      font-family: "Segoe UI", sans-serif;
     }
 
-    button,
-    input,
-    select,
-    textarea {
-      font: inherit;
-    }
+    button, input, select, textarea { font: inherit; }
 
     .shell {
       width: min(1180px, calc(100% - 32px));
       margin: 0 auto;
-      padding: 28px 0 40px;
+      padding: 24px 0 40px;
     }
 
     .topbar {
       display: flex;
       justify-content: space-between;
       gap: 16px;
-      align-items: flex-end;
-      margin-bottom: 22px;
+      align-items: center;
+      margin-bottom: 18px;
     }
 
-    h1 {
-      margin: 0;
-      font-size: clamp(2rem, 7vw, 4.6rem);
-      line-height: 0.92;
-      letter-spacing: 0;
-    }
+    h1, h2, h3 { margin: 0; letter-spacing: 0; }
 
-    .lede {
-      max-width: 560px;
-      margin: 10px 0 0;
-      color: var(--muted);
-      font-family: "Segoe UI", sans-serif;
-      font-size: 1rem;
-    }
+    h1 { font-size: clamp(2rem, 7vw, 4rem); line-height: 0.95; }
+    h2 { font-size: 1.2rem; }
+    h3 { font-size: 1rem; }
 
     .status {
-      min-width: 190px;
       color: var(--brand-strong);
       background: var(--soft);
       border: 1px solid #b8d9d2;
       border-radius: 999px;
       padding: 9px 14px;
-      font-family: "Segoe UI", sans-serif;
       font-size: 0.92rem;
       text-align: center;
     }
@@ -99,23 +203,26 @@ func GalleryHTML() string {
       align-items: start;
     }
 
+    .side {
+      display: grid;
+      gap: 14px;
+      position: sticky;
+      top: 16px;
+    }
+
     .panel {
-      background: rgba(255, 255, 255, 0.86);
+      background: rgba(255, 255, 255, 0.92);
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: var(--shadow);
     }
 
-    .upload {
-      position: sticky;
-      top: 18px;
-      padding: 18px;
-    }
+    .panel-inner { padding: 16px; }
 
     .dropzone {
       display: grid;
       place-items: center;
-      min-height: 190px;
+      min-height: 150px;
       border: 2px dashed #9ab5ad;
       border-radius: 8px;
       background: #f8fbf9;
@@ -125,41 +232,28 @@ func GalleryHTML() string {
       transition: border-color 160ms ease, background 160ms ease;
     }
 
-    .dropzone:hover,
-    .dropzone.is-over {
+    .dropzone:hover, .dropzone.is-over {
       border-color: var(--brand);
       background: #edf8f5;
     }
 
-    .dropzone strong {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 1.1rem;
-    }
-
-    .dropzone span {
-      color: var(--muted);
-      font-family: "Segoe UI", sans-serif;
-      font-size: 0.92rem;
-    }
+    .dropzone strong { display: block; margin-bottom: 6px; overflow-wrap: anywhere; }
+    .dropzone span { color: var(--muted); font-size: 0.9rem; }
 
     .field {
       display: grid;
       gap: 6px;
       margin-top: 12px;
-      font-family: "Segoe UI", sans-serif;
     }
 
-    .field label {
+    .field label, .checkset legend {
       color: var(--muted);
-      font-size: 0.84rem;
-      font-weight: 700;
+      font-size: 0.82rem;
+      font-weight: 800;
       text-transform: uppercase;
     }
 
-    .field input,
-    .field select,
-    .field textarea {
+    .field input, .field select, .field textarea {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -170,30 +264,48 @@ func GalleryHTML() string {
 
     .field textarea {
       resize: vertical;
-      min-height: 86px;
+      min-height: 78px;
+    }
+
+    .checkset {
+      display: grid;
+      gap: 8px;
+      margin: 12px 0 0;
+      padding: 0;
+      border: 0;
+    }
+
+    .checks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .checks label {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: #fff;
     }
 
     .actions {
       display: flex;
       gap: 10px;
+      flex-wrap: wrap;
       margin-top: 14px;
     }
 
     .button {
       border: 0;
       border-radius: 8px;
-      padding: 11px 14px;
+      padding: 10px 13px;
       cursor: pointer;
       color: #fff;
       background: var(--brand);
-      font-family: "Segoe UI", sans-serif;
       font-weight: 800;
-      transition: transform 140ms ease, background 140ms ease;
-    }
-
-    .button:hover {
-      background: var(--brand-strong);
-      transform: translateY(-1px);
     }
 
     .button.secondary {
@@ -201,15 +313,8 @@ func GalleryHTML() string {
       background: var(--soft);
     }
 
-    .button.danger {
-      background: var(--danger);
-    }
-
-    .button:disabled {
-      cursor: not-allowed;
-      opacity: 0.58;
-      transform: none;
-    }
+    .button.danger { background: var(--danger); }
+    .button:disabled { cursor: not-allowed; opacity: 0.6; }
 
     .toolbar {
       display: flex;
@@ -220,18 +325,12 @@ func GalleryHTML() string {
       margin-bottom: 14px;
     }
 
-    .toolbar h2 {
-      margin: 0;
-      font-size: 1.25rem;
-    }
-
     .toolbar select {
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 9px 10px;
       background: #fff;
       color: var(--ink);
-      font-family: "Segoe UI", sans-serif;
     }
 
     .grid {
@@ -240,12 +339,11 @@ func GalleryHTML() string {
       gap: 14px;
     }
 
-    .asset {
+    .asset, .key-row {
       overflow: hidden;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel);
-      box-shadow: 0 12px 26px rgba(23, 33, 29, 0.07);
     }
 
     .thumb {
@@ -254,6 +352,9 @@ func GalleryHTML() string {
       aspect-ratio: 4 / 3;
       background: #e8eee9;
       overflow: hidden;
+      color: var(--muted);
+      text-decoration: none;
+      font-weight: 900;
     }
 
     .thumb img {
@@ -263,46 +364,17 @@ func GalleryHTML() string {
       display: block;
     }
 
-    .pdf {
-      width: 76px;
-      height: 96px;
-      border-radius: 6px;
-      background: #fff;
-      border: 1px solid #cfd8d3;
-      display: grid;
-      place-items: center;
-      color: var(--danger);
-      font-family: "Segoe UI", sans-serif;
-      font-weight: 900;
-      box-shadow: 0 10px 18px rgba(23, 33, 29, 0.1);
-    }
+    .meta, .key-row { padding: 12px; }
+    .meta strong, .key-row strong { display: block; overflow-wrap: anywhere; margin-bottom: 6px; }
+    .meta p, .key-row p { margin: 0 0 10px; color: var(--muted); font-size: 0.9rem; overflow-wrap: anywhere; }
 
-    .meta {
-      padding: 12px;
-      font-family: "Segoe UI", sans-serif;
-    }
-
-    .meta strong {
-      display: block;
-      overflow-wrap: anywhere;
-      margin-bottom: 6px;
-    }
-
-    .meta p {
-      margin: 0 0 10px;
-      color: var(--muted);
-      font-size: 0.9rem;
-      overflow-wrap: anywhere;
-    }
-
-    .asset-actions {
+    .asset-actions, .key-actions {
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
     }
 
-    .asset-actions a,
-    .asset-actions button {
+    .asset-actions a, .asset-actions button, .key-actions button {
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 7px 9px;
@@ -310,18 +382,16 @@ func GalleryHTML() string {
       color: var(--ink);
       text-decoration: none;
       cursor: pointer;
-      font-family: "Segoe UI", sans-serif;
       font-size: 0.86rem;
     }
 
     .empty {
       display: grid;
       place-items: center;
-      min-height: 260px;
+      min-height: 220px;
       border: 1px dashed #9ab5ad;
       border-radius: 8px;
       color: var(--muted);
-      font-family: "Segoe UI", sans-serif;
       text-align: center;
       padding: 24px;
     }
@@ -330,27 +400,17 @@ func GalleryHTML() string {
       min-height: 22px;
       margin-top: 12px;
       color: var(--muted);
-      font-family: "Segoe UI", sans-serif;
       font-size: 0.92rem;
+      overflow-wrap: anywhere;
     }
 
-    .message.error {
-      color: var(--danger);
-    }
+    .message.error { color: var(--danger); }
+    .keys { display: grid; gap: 10px; margin-top: 12px; }
 
-    @media (max-width: 820px) {
-      .topbar {
-        align-items: stretch;
-        flex-direction: column;
-      }
-
-      .layout {
-        grid-template-columns: 1fr;
-      }
-
-      .upload {
-        position: static;
-      }
+    @media (max-width: 860px) {
+      .topbar { align-items: stretch; flex-direction: column; }
+      .layout { grid-template-columns: 1fr; }
+      .side { position: static; }
     }
   </style>
 </head>
@@ -359,50 +419,76 @@ func GalleryHTML() string {
     <header class="topbar">
       <div>
         <h1>Media Gallery</h1>
-        <p class="lede">Subi imagenes y PDFs, revisa metadata y administra assets publicos o privados desde el navegador.</p>
+        <div class="status" id="status">Listo</div>
       </div>
-      <div class="status" id="status">Listo</div>
+      <button class="button secondary" id="logoutButton" type="button">Salir</button>
     </header>
 
     <section class="layout">
-      <form class="panel upload" id="uploadForm">
-        <label class="dropzone" id="dropzone">
-          <input id="fileInput" name="file" type="file" accept=".jpg,.jpeg,.png,.webp,.pdf" hidden required />
-          <span>
-            <strong id="fileLabel">Elegir archivo</strong>
-            JPG, JPEG, PNG, WEBP o PDF
-          </span>
-        </label>
+      <aside class="side">
+        <form class="panel panel-inner" id="uploadForm">
+          <h2>Subir archivo</h2>
+          <label class="dropzone" id="dropzone">
+            <input id="fileInput" name="file" type="file" hidden required />
+            <span>
+              <strong id="fileLabel">Elegir archivo</strong>
+              Cualquier tipo de archivo
+            </span>
+          </label>
 
-        <div class="field">
-          <label for="visibility">Visibilidad</label>
-          <select id="visibility" name="visibility">
-            <option value="public">Public</option>
-            <option value="private">Private</option>
-          </select>
-        </div>
+          <div class="field">
+            <label for="visibility">Visibilidad</label>
+            <select id="visibility" name="visibility">
+              <option value="public">Public</option>
+              <option value="private">Private</option>
+            </select>
+          </div>
 
-        <div class="field">
-          <label for="title">Titulo</label>
-          <input id="title" name="title" maxlength="160" placeholder="Nombre visible" />
-        </div>
+          <div class="field">
+            <label for="title">Titulo</label>
+            <input id="title" name="title" maxlength="160" placeholder="Nombre visible" />
+          </div>
 
-        <div class="field">
-          <label for="category">Categoria</label>
-          <input id="category" name="category" maxlength="120" placeholder="Ej: documentos" />
-        </div>
+          <div class="field">
+            <label for="category">Categoria</label>
+            <input id="category" name="category" maxlength="120" placeholder="Ej: documentos" />
+          </div>
 
-        <div class="field">
-          <label for="description">Descripcion</label>
-          <textarea id="description" name="description" maxlength="600" placeholder="Detalle breve"></textarea>
-        </div>
+          <div class="field">
+            <label for="description">Descripcion</label>
+            <textarea id="description" name="description" maxlength="600" placeholder="Detalle breve"></textarea>
+          </div>
 
-        <div class="actions">
-          <button class="button" id="uploadButton" type="submit">Subir</button>
-          <button class="button secondary" id="refreshButton" type="button">Refrescar</button>
-        </div>
-        <div class="message" id="message"></div>
-      </form>
+          <div class="actions">
+            <button class="button" id="uploadButton" type="submit">Subir</button>
+            <button class="button secondary" id="refreshButton" type="button">Refrescar</button>
+          </div>
+          <div class="message" id="message"></div>
+        </form>
+
+        <section class="panel panel-inner">
+          <h2>Api keys</h2>
+          <form id="keyForm">
+            <div class="field">
+              <label for="keyName">Nombre</label>
+              <input id="keyName" name="name" maxlength="120" placeholder="Integracion externa" required />
+            </div>
+            <fieldset class="checkset">
+              <legend>Scopes</legend>
+              <div class="checks">
+                <label><input type="checkbox" name="scope" value="read" checked /> read</label>
+                <label><input type="checkbox" name="scope" value="write" checked /> write</label>
+                <label><input type="checkbox" name="scope" value="delete" /> delete</label>
+              </div>
+            </fieldset>
+            <div class="actions">
+              <button class="button" type="submit">Crear key</button>
+            </div>
+          </form>
+          <div class="message" id="keyMessage"></div>
+          <div class="keys" id="keys"></div>
+        </section>
+      </aside>
 
       <section>
         <div class="panel toolbar">
@@ -410,7 +496,6 @@ func GalleryHTML() string {
           <select id="filter">
             <option value="all">Todos</option>
             <option value="image">Imagenes</option>
-            <option value="pdf">PDF</option>
             <option value="public">Publicos</option>
             <option value="private">Privados</option>
           </select>
@@ -421,21 +506,22 @@ func GalleryHTML() string {
   </main>
 
   <script>
-    const state = {
-      files: [],
-      filter: "all"
-    };
-
+    const state = { files: [], keys: [], filter: "all" };
     const form = document.querySelector("#uploadForm");
     const fileInput = document.querySelector("#fileInput");
     const fileLabel = document.querySelector("#fileLabel");
     const dropzone = document.querySelector("#dropzone");
     const uploadButton = document.querySelector("#uploadButton");
     const refreshButton = document.querySelector("#refreshButton");
+    const logoutButton = document.querySelector("#logoutButton");
     const gallery = document.querySelector("#gallery");
     const message = document.querySelector("#message");
     const status = document.querySelector("#status");
     const filter = document.querySelector("#filter");
+    const keyForm = document.querySelector("#keyForm");
+    const keyName = document.querySelector("#keyName");
+    const keyMessage = document.querySelector("#keyMessage");
+    const keys = document.querySelector("#keys");
 
     fileInput.addEventListener("change", () => {
       fileLabel.textContent = fileInput.files[0] ? fileInput.files[0].name : "Elegir archivo";
@@ -446,9 +532,7 @@ func GalleryHTML() string {
       dropzone.classList.add("is-over");
     });
 
-    dropzone.addEventListener("dragleave", () => {
-      dropzone.classList.remove("is-over");
-    });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("is-over"));
 
     dropzone.addEventListener("drop", (event) => {
       event.preventDefault();
@@ -461,11 +545,17 @@ func GalleryHTML() string {
 
     filter.addEventListener("change", () => {
       state.filter = filter.value;
-      render();
+      renderFiles();
     });
 
     refreshButton.addEventListener("click", () => {
       loadFiles();
+      loadKeys();
+    });
+
+    logoutButton.addEventListener("click", async () => {
+      await fetch("/logout", { method: "POST" });
+      window.location.href = "/login";
     });
 
     form.addEventListener("submit", async (event) => {
@@ -480,7 +570,7 @@ func GalleryHTML() string {
       setMessage("");
 
       try {
-        const response = await fetch("/api/v1/media/upload", {
+        const response = await fetch("/web/media/upload", {
           method: "POST",
           body: new FormData(form)
         });
@@ -501,6 +591,37 @@ func GalleryHTML() string {
       }
     });
 
+    keyForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const scopes = Array.from(keyForm.querySelectorAll("input[name='scope']:checked")).map((item) => item.value);
+      if (scopes.length === 0) {
+        setKeyMessage("Selecciona al menos un scope.", true);
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/v1/api-keys/", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: keyName.value,
+            scopes
+          })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error?.message || "No se pudo crear la api key");
+        }
+        keyForm.reset();
+        keyForm.querySelector("input[value='read']").checked = true;
+        keyForm.querySelector("input[value='write']").checked = true;
+        setKeyMessage("Key creada: " + payload.data.secret);
+        await loadKeys();
+      } catch (error) {
+        setKeyMessage(error.message, true);
+      }
+    });
+
     async function loadFiles() {
       setStatus("Cargando");
       try {
@@ -510,7 +631,7 @@ func GalleryHTML() string {
           throw new Error(payload.error?.message || "No se pudo listar la galeria");
         }
         state.files = payload.data || [];
-        render();
+        renderFiles();
         setStatus(state.files.length + " assets");
       } catch (error) {
         gallery.innerHTML = emptyState(error.message);
@@ -518,7 +639,21 @@ func GalleryHTML() string {
       }
     }
 
-    function render() {
+    async function loadKeys() {
+      try {
+        const response = await fetch("/api/v1/api-keys/");
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error?.message || "No se pudieron listar las api keys");
+        }
+        state.keys = payload.data || [];
+        renderKeys();
+      } catch (error) {
+        keys.innerHTML = emptyState(error.message);
+      }
+    }
+
+    function renderFiles() {
       const files = state.files.filter(matchesFilter);
       if (files.length === 0) {
         gallery.innerHTML = emptyState("No hay assets para mostrar.");
@@ -532,7 +667,7 @@ func GalleryHTML() string {
         const downloadURL = "/api/v1/media/" + encodeURIComponent(file.id) + "/download";
         const preview = file.mime_type.startsWith("image/")
           ? "<img src=\"" + downloadURL + "\" alt=\"" + title + "\" loading=\"lazy\" />"
-          : "<div class=\"pdf\">PDF</div>";
+          : "<span>" + escapeHTML(file.extension || "file") + "</span>";
 
         return ""
           + "<article class=\"asset\">"
@@ -550,6 +685,24 @@ func GalleryHTML() string {
       }).join("");
     }
 
+    function renderKeys() {
+      if (state.keys.length === 0) {
+        keys.innerHTML = emptyState("No hay api keys activas.");
+        return;
+      }
+
+      keys.innerHTML = state.keys.map((key) => {
+        return ""
+          + "<article class=\"key-row\">"
+          + "<strong>" + escapeHTML(key.name) + "</strong>"
+          + "<p>" + escapeHTML(key.key_prefix + "..." + " - " + key.scopes.join(", ")) + "</p>"
+          + "<div class=\"key-actions\">"
+          + "<button type=\"button\" data-revoke=\"" + escapeHTML(key.id) + "\">Revocar</button>"
+          + "</div>"
+          + "</article>";
+      }).join("");
+    }
+
     gallery.addEventListener("click", async (event) => {
       const button = event.target.closest("[data-delete]");
       if (!button) {
@@ -560,19 +713,39 @@ func GalleryHTML() string {
       button.disabled = true;
       setStatus("Borrando");
       try {
-        const response = await fetch("/api/v1/media/" + encodeURIComponent(id), {
-          method: "DELETE"
-        });
+        const response = await fetch("/api/v1/media/" + encodeURIComponent(id), { method: "DELETE" });
         if (!response.ok) {
           const payload = await response.json();
           throw new Error(payload.error?.message || "No se pudo borrar");
         }
         state.files = state.files.filter((file) => file.id !== id);
-        render();
+        renderFiles();
         setStatus(state.files.length + " assets");
       } catch (error) {
         setMessage(error.message, true);
         setStatus("Error");
+        button.disabled = false;
+      }
+    });
+
+    keys.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-revoke]");
+      if (!button) {
+        return;
+      }
+
+      button.disabled = true;
+      try {
+        const response = await fetch("/api/v1/api-keys/" + encodeURIComponent(button.getAttribute("data-revoke")), {
+          method: "DELETE"
+        });
+        if (!response.ok) {
+          const payload = await response.json();
+          throw new Error(payload.error?.message || "No se pudo revocar");
+        }
+        await loadKeys();
+      } catch (error) {
+        setKeyMessage(error.message, true);
         button.disabled = false;
       }
     });
@@ -584,15 +757,17 @@ func GalleryHTML() string {
       if (state.filter === "image") {
         return file.mime_type.startsWith("image/");
       }
-      if (state.filter === "pdf") {
-        return file.mime_type === "application/pdf";
-      }
       return file.visibility === state.filter;
     }
 
     function setMessage(value, isError = false) {
       message.textContent = value;
       message.classList.toggle("error", isError);
+    }
+
+    function setKeyMessage(value, isError = false) {
+      keyMessage.textContent = value;
+      keyMessage.classList.toggle("error", isError);
     }
 
     function setStatus(value) {
@@ -603,7 +778,7 @@ func GalleryHTML() string {
       if (!value) {
         return "0 B";
       }
-      const units = ["B", "KB", "MB", "GB"];
+      const units = ["B", "KB", "MB", "GB", "TB"];
       let size = value;
       let unit = 0;
       while (size >= 1024 && unit < units.length - 1) {
@@ -628,6 +803,7 @@ func GalleryHTML() string {
     }
 
     loadFiles();
+    loadKeys();
   </script>
 </body>
 </html>`

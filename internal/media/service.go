@@ -3,7 +3,6 @@ package media
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -18,14 +17,6 @@ import (
 )
 
 const sniffSize = 512
-
-var allowedMIMEsByExtension = map[string]string{
-	".jpg":  "image/jpeg",
-	".jpeg": "image/jpeg",
-	".png":  "image/png",
-	".webp": "image/webp",
-	".pdf":  "application/pdf",
-}
 
 // Service coordina validacion, storage y metadata de media.
 //
@@ -93,7 +84,8 @@ func (s *Service) Upload(ctx context.Context, header *multipart.FileHeader, inpu
 	}
 	defer src.Close()
 
-	if err := validateMIME(src, validated.Extension, validated.MIMEType); err != nil {
+	mimeType, err := detectMIME(src)
+	if err != nil {
 		return File{}, err
 	}
 	if _, err := src.Seek(0, io.SeekStart); err != nil {
@@ -112,7 +104,7 @@ func (s *Service) Upload(ctx context.Context, header *multipart.FileHeader, inpu
 		ID:            id,
 		OriginalName:  sanitizeFilename(header.Filename),
 		StoredName:    storedName,
-		MIMEType:      validated.MIMEType,
+		MIMEType:      mimeType,
 		Extension:     strings.TrimPrefix(validated.Extension, "."),
 		SizeBytes:     header.Size,
 		StorageDriver: StorageDriverLocal,
@@ -190,15 +182,16 @@ func (s *Service) Get(ctx context.Context, id string) (File, error) {
 // Args:
 //   - ctx: contexto de la operacion.
 //   - id: identificador publico.
+//   - allowPrivate: permiso externo para abrir privados.
 //
 // Returns:
 //   - Metadata y reader o error controlado.
-func (s *Service) Download(ctx context.Context, id string) (DownloadFile, error) {
+func (s *Service) Download(ctx context.Context, id string, allowPrivate bool) (DownloadFile, error) {
 	file, err := s.Get(ctx, id)
 	if err != nil {
 		return DownloadFile{}, err
 	}
-	if file.Visibility == VisibilityPrivate {
+	if file.Visibility == VisibilityPrivate && !allowPrivate {
 		return DownloadFile{}, appError("media_forbidden", "Media privada sin autenticacion", ErrForbidden)
 	}
 
@@ -242,46 +235,37 @@ func (s *Service) validateHeader(header *multipart.FileHeader) (validatedFile, e
 	if header.Size <= 0 {
 		return validatedFile{}, appError("media_empty_file", "El archivo esta vacio", ErrFileEmpty)
 	}
-	if header.Size > s.maxUploadBytes {
+	if s.maxUploadBytes > 0 && header.Size > s.maxUploadBytes {
 		return validatedFile{}, appError("media_too_large", "El archivo supera el tamaño maximo permitido", ErrFileTooLarge)
 	}
 
-	extension := strings.ToLower(filepath.Ext(header.Filename))
-	expectedMIME, ok := allowedMIMEsByExtension[extension]
-	if !ok {
-		return validatedFile{}, appError("media_unsupported_extension", "La extension del archivo no esta permitida", ErrUnsupportedType)
-	}
+	extension := sanitizeExtension(filepath.Ext(header.Filename))
 
-	return validatedFile{Extension: extension, MIMEType: expectedMIME}, nil
+	return validatedFile{Extension: extension}, nil
 }
 
-func validateMIME(file multipart.File, extension string, expectedMIME string) error {
+func detectMIME(file multipart.File) (string, error) {
 	buffer := make([]byte, sniffSize)
 	n, err := file.Read(buffer)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return appError("media_sniff_failed", "No se pudo validar el archivo", err)
+		return "", appError("media_sniff_failed", "No se pudo validar el archivo", err)
 	}
 	if n == 0 {
-		return appError("media_empty_file", "El archivo esta vacio", ErrFileEmpty)
+		return "", appError("media_empty_file", "El archivo esta vacio", ErrFileEmpty)
 	}
 
 	detectedMIME := http.DetectContentType(buffer[:n])
-	if extension == ".pdf" && strings.HasPrefix(string(buffer[:n]), "%PDF-") {
+	if strings.HasPrefix(string(buffer[:n]), "%PDF-") {
 		detectedMIME = "application/pdf"
 	}
-	if extension == ".webp" && isWebP(buffer[:n]) {
+	if isWebP(buffer[:n]) {
 		detectedMIME = "image/webp"
 	}
-
-	if detectedMIME != expectedMIME {
-		return appError(
-			"media_unsupported_mime",
-			fmt.Sprintf("MIME no permitido: %s", detectedMIME),
-			ErrUnsupportedType,
-		)
+	if strings.TrimSpace(detectedMIME) == "" {
+		detectedMIME = "application/octet-stream"
 	}
 
-	return nil
+	return detectedMIME, nil
 }
 
 func normalizeVisibility(value string) (string, error) {
@@ -302,6 +286,20 @@ func sanitizeFilename(value string) string {
 		return "archivo"
 	}
 	return name
+}
+
+func sanitizeExtension(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "." || len(value) > 32 || !strings.HasPrefix(value, ".") {
+		return ""
+	}
+	for _, r := range strings.TrimPrefix(value, ".") {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return ""
+	}
+	return value
 }
 
 func sanitizeText(value string, limit int) string {
@@ -349,5 +347,4 @@ func clampLimit(limit int) int {
 
 type validatedFile struct {
 	Extension string
-	MIMEType  string
 }

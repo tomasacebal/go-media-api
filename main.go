@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/tomasacebal/go-media-api/internal/auth"
 	"github.com/tomasacebal/go-media-api/internal/config"
 	"github.com/tomasacebal/go-media-api/internal/media"
 	"github.com/tomasacebal/go-media-api/internal/storage"
@@ -38,14 +39,21 @@ func buildApp(cfg config.Config, logger *log.Logger) (*fiber.App, func() error, 
 		return nil, nil, err
 	}
 
-	storageProvider, err := storage.NewLocalProvider(cfg.Media.StoragePath, cfg.Media.PublicBaseURL)
+	keyRepo, closeKeyRepo, err := auth.NewSQLiteKeyRepository(cfg.Media.SQLitePath)
 	if err != nil {
 		_ = closeRepo()
 		return nil, nil, err
 	}
 
+	storageProvider, err := storage.NewLocalProvider(cfg.Media.StoragePath, cfg.Media.PublicBaseURL)
+	if err != nil {
+		_ = closeKeyRepo()
+		_ = closeRepo()
+		return nil, nil, err
+	}
+
 	app := fiber.New(fiber.Config{
-		BodyLimit:    int(cfg.Media.MaxUploadBytes + 1024*1024),
+		BodyLimit:    requestBodyLimit(cfg.Media.MaxUploadBytes),
 		ErrorHandler: media.JSONErrorHandler,
 	})
 
@@ -60,21 +68,34 @@ func buildApp(cfg config.Config, logger *log.Logger) (*fiber.App, func() error, 
 		return err
 	})
 
-	registerBaseRoutes(app, cfg)
-
+	keyService := auth.NewAPIKeyService(keyRepo)
+	sessionManager := auth.NewSessionManager(cfg.Auth.AdminUsername, cfg.Auth.AdminPassword, cfg.Auth.SessionSecret)
+	authMiddleware := auth.NewMiddleware(sessionManager, keyService)
+	authHandler := auth.NewHandler(sessionManager, keyService, authMiddleware)
+	authHandler.RegisterRoutes(app)
+	registerBaseRoutes(app, cfg, authMiddleware)
 	mediaService := media.NewService(repo, storageProvider, cfg.Media.MaxUploadBytes, cfg.Media.PublicBaseURL)
-	mediaHandler := media.NewHandler(mediaService, logger)
+	mediaHandler := media.NewHandler(mediaService, logger, authMiddleware)
 	mediaHandler.RegisterRoutes(app)
 
-	return app, closeRepo, nil
+	cleanup := func() error {
+		keyErr := closeKeyRepo()
+		mediaErr := closeRepo()
+		if keyErr != nil {
+			return keyErr
+		}
+		return mediaErr
+	}
+
+	return app, cleanup, nil
 }
 
-func registerBaseRoutes(app *fiber.App, cfg config.Config) {
+func registerBaseRoutes(app *fiber.App, cfg config.Config, authMiddleware *auth.Middleware) {
 	app.Get("/favicon.ico", func(c *fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
-	app.Get("/", func(c *fiber.Ctx) error {
+	app.Get("/", authMiddleware.RequireSessionPage, func(c *fiber.Ctx) error {
 		return c.Type("html").SendString(web.GalleryHTML())
 	})
 
@@ -91,4 +112,16 @@ func registerBaseRoutes(app *fiber.App, cfg config.Config) {
 			"port":    cfg.Port,
 		})
 	})
+}
+
+func requestBodyLimit(maxUploadBytes int64) int {
+	if maxUploadBytes > 0 {
+		limit := maxUploadBytes + 1024*1024
+		maxInt := int64(int(^uint(0) >> 1))
+		if limit > maxInt {
+			return int(maxInt)
+		}
+		return int(limit)
+	}
+	return int(^uint(0) >> 1)
 }

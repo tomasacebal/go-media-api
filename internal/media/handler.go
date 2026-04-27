@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/tomasacebal/go-media-api/internal/auth"
 )
 
 // Handler expone endpoints Fiber para media.
@@ -19,8 +20,9 @@ import (
 // Returns:
 //   - Handler listo para registrar rutas.
 type Handler struct {
-	service *Service
-	logger  *log.Logger
+	service        *Service
+	logger         *log.Logger
+	authMiddleware *auth.Middleware
 }
 
 // NewHandler crea un handler HTTP de media.
@@ -28,11 +30,12 @@ type Handler struct {
 // Args:
 //   - service: servicio de media.
 //   - logger: logger de la aplicacion.
+//   - authMiddleware: guards de autenticacion.
 //
 // Returns:
 //   - Handler inicializado.
-func NewHandler(service *Service, logger *log.Logger) *Handler {
-	return &Handler{service: service, logger: logger}
+func NewHandler(service *Service, logger *log.Logger, authMiddleware *auth.Middleware) *Handler {
+	return &Handler{service: service, logger: logger, authMiddleware: authMiddleware}
 }
 
 // RegisterRoutes registra las rutas del modulo media.
@@ -43,14 +46,15 @@ func NewHandler(service *Service, logger *log.Logger) *Handler {
 // Returns:
 //   - No retorna valores.
 func (h *Handler) RegisterRoutes(app *fiber.App) {
-	app.Get("/api/v1/media", h.List)
+	app.Get("/api/v1/media", h.authMiddleware.RequireSessionOrAPIKey(auth.ScopeRead), h.List)
+	app.Post("/web/media/upload", h.authMiddleware.RequireSessionJSON, h.Upload)
 
 	group := app.Group("/api/v1/media")
-	group.Get("/", h.List)
-	group.Post("/upload", h.Upload)
-	group.Get("/:id", h.Get)
-	group.Get("/:id/download", h.Download)
-	group.Delete("/:id", h.Delete)
+	group.Get("/", h.authMiddleware.RequireSessionOrAPIKey(auth.ScopeRead), h.List)
+	group.Post("/upload", h.authMiddleware.RequireAPIKey(auth.ScopeWrite), h.Upload)
+	group.Get("/:id", h.authMiddleware.RequireSessionOrAPIKey(auth.ScopeRead), h.Get)
+	group.Get("/:id/download", h.authMiddleware.OptionalSessionOrAPIKey(auth.ScopeRead), h.Download)
+	group.Delete("/:id", h.authMiddleware.RequireSessionOrAPIKey(auth.ScopeDelete), h.Delete)
 }
 
 // Upload procesa un multipart upload.
@@ -127,7 +131,8 @@ func (h *Handler) Get(c *fiber.Ctx) error {
 // Returns:
 //   - Stream del archivo o error JSON.
 func (h *Handler) Download(c *fiber.Ctx) error {
-	download, err := h.service.Download(c.UserContext(), c.Params("id"))
+	allowPrivate := auth.HasSession(c) || auth.HasAPIKey(c)
+	download, err := h.service.Download(c.UserContext(), c.Params("id"), allowPrivate)
 	if err != nil {
 		return writeError(c, err)
 	}
