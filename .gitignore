@@ -35,3 +35,6 @@ go.work.sum
 .vscode/
 /.omx
 IMPLEMENTATION_PLAN.md
+/node_modules
+/chrome-profile
+*.log

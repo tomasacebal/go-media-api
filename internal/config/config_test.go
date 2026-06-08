@@ -8,15 +8,21 @@ import (
 
 func TestLoadReadsDotEnv(t *testing.T) {
 	chdirTemp(t)
-	unsetEnvKeys(t, "PORT", "MEDIA_MAX_UPLOAD_MB", "MEDIA_STORAGE_PATH", "MEDIA_PUBLIC_BASE_URL", "ADMIN_USERNAME", "ADMIN_PASSWORD", "SESSION_SECRET")
+	unsetEnvKeys(t, "PORT", "MEDIA_MAX_UPLOAD_MB", "MEDIA_STORAGE_PATH", "MEDIA_PUBLIC_BASE_URL", "ADMIN_USERNAME", "ADMIN_EMAIL", "ADMIN_NAME", "ADMIN_PASSWORD", "SESSION_SECRET", "SESSION_TTL_HOURS", "COOKIE_SECURE", "USER_DEFAULT_QUOTA_GB", "SHARE_DEFAULT_TTL_DAYS")
 	writeDotEnv(t, `
 PORT=9090
 MEDIA_MAX_UPLOAD_MB=4
 MEDIA_STORAGE_PATH=uploads
 MEDIA_PUBLIC_BASE_URL=http://localhost:9090/
 ADMIN_USERNAME=admin-local
+ADMIN_EMAIL=admin@example.test
+ADMIN_NAME=Admin Local
 ADMIN_PASSWORD=admin-local-password
 SESSION_SECRET=local-session-secret-with-more-than-32-chars
+SESSION_TTL_HOURS=24
+COOKIE_SECURE=true
+USER_DEFAULT_QUOTA_GB=20
+SHARE_DEFAULT_TTL_DAYS=14
 `)
 
 	cfg, err := Load()
@@ -45,14 +51,35 @@ SESSION_SECRET=local-session-secret-with-more-than-32-chars
 	if cfg.Auth.AdminUsername != "admin-local" {
 		t.Fatalf("admin username inesperado: %s", cfg.Auth.AdminUsername)
 	}
+	if cfg.Auth.AdminEmail != "admin@example.test" {
+		t.Fatalf("admin email inesperado: %s", cfg.Auth.AdminEmail)
+	}
+	if cfg.Auth.AdminName != "Admin Local" {
+		t.Fatalf("admin name inesperado: %s", cfg.Auth.AdminName)
+	}
 	if cfg.Auth.AdminPassword != "admin-local-password" {
 		t.Fatalf("admin password inesperado: %s", cfg.Auth.AdminPassword)
+	}
+	if cfg.Auth.SessionTTLHours != 24 {
+		t.Fatalf("session ttl esperado 24, recibido %d", cfg.Auth.SessionTTLHours)
+	}
+	if !cfg.Auth.CookieSecure {
+		t.Fatal("cookie secure esperado true")
+	}
+	if cfg.Product.DefaultQuotaGB != 20 {
+		t.Fatalf("quota gb esperada 20, recibida %d", cfg.Product.DefaultQuotaGB)
+	}
+	if cfg.Product.DefaultQuotaBytes != 20*1024*1024*1024 {
+		t.Fatalf("quota bytes inesperada: %d", cfg.Product.DefaultQuotaBytes)
+	}
+	if cfg.Product.ShareTTLDays != 14 {
+		t.Fatalf("share ttl esperado 14, recibido %d", cfg.Product.ShareTTLDays)
 	}
 }
 
 func TestLoadDoesNotOverrideExistingEnvironment(t *testing.T) {
 	chdirTemp(t)
-	unsetEnvKeys(t, "PORT", "MEDIA_MAX_UPLOAD_MB", "MEDIA_STORAGE_PATH", "MEDIA_PUBLIC_BASE_URL", "ADMIN_USERNAME", "ADMIN_PASSWORD", "SESSION_SECRET")
+	unsetEnvKeys(t, "PORT", "MEDIA_MAX_UPLOAD_MB", "MEDIA_STORAGE_PATH", "MEDIA_PUBLIC_BASE_URL", "ADMIN_USERNAME", "ADMIN_EMAIL", "ADMIN_NAME", "ADMIN_PASSWORD", "SESSION_SECRET", "SESSION_TTL_HOURS", "COOKIE_SECURE", "USER_DEFAULT_QUOTA_GB", "SHARE_DEFAULT_TTL_DAYS")
 	t.Setenv("ADMIN_PASSWORD", "from-env")
 	writeDotEnv(t, `
 ADMIN_PASSWORD=from-file
@@ -71,7 +98,7 @@ SESSION_SECRET=local-session-secret-with-more-than-32-chars
 
 func TestLoadReturnsDotEnvError(t *testing.T) {
 	chdirTemp(t)
-	unsetEnvKeys(t, "PORT", "MEDIA_MAX_UPLOAD_MB", "MEDIA_STORAGE_PATH", "MEDIA_PUBLIC_BASE_URL", "ADMIN_USERNAME", "ADMIN_PASSWORD", "SESSION_SECRET")
+	unsetEnvKeys(t, "PORT", "MEDIA_MAX_UPLOAD_MB", "MEDIA_STORAGE_PATH", "MEDIA_PUBLIC_BASE_URL", "ADMIN_USERNAME", "ADMIN_EMAIL", "ADMIN_NAME", "ADMIN_PASSWORD", "SESSION_SECRET", "SESSION_TTL_HOURS", "COOKIE_SECURE", "USER_DEFAULT_QUOTA_GB", "SHARE_DEFAULT_TTL_DAYS")
 	writeDotEnv(t, "ADMIN_PASSWORD\n")
 
 	if _, err := Load(); err == nil {

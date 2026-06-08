@@ -12,74 +12,79 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-const (
-	sessionCookieName = "go_media_session"
-	sessionTTL        = 12 * time.Hour
-	LocalSessionUser  = "session_user"
-)
+const sessionCookieName = "go_media_session"
 
 // SessionManager firma y valida sesiones web.
 //
 // Args:
-//   - username: usuario admin esperado.
-//   - password: password admin esperado.
+//   - users: servicio de usuarios.
 //   - secret: secreto usado para HMAC.
+//   - secureCookie: activa cookies Secure.
+//   - ttl: duracion de la sesion.
 //
 // Returns:
 //   - Manager listo para emitir y validar cookies.
 type SessionManager struct {
-	username string
-	password string
-	secret   []byte
+	users        *UserService
+	secret       []byte
+	secureCookie bool
+	ttl          time.Duration
 }
 
 // NewSessionManager crea un manager de sesiones.
 //
 // Args:
-//   - username: usuario admin esperado.
-//   - password: password admin esperado.
+//   - users: servicio de usuarios.
 //   - secret: secreto usado para firmar cookies.
+//   - secureCookie: activa cookies Secure.
+//   - ttl: duracion de sesion.
 //
 // Returns:
 //   - SessionManager inicializado.
-func NewSessionManager(username string, password string, secret string) *SessionManager {
+func NewSessionManager(users *UserService, secret string, secureCookie bool, ttl time.Duration) *SessionManager {
 	return &SessionManager{
-		username: strings.TrimSpace(username),
-		password: password,
-		secret:   []byte(secret),
+		users:        users,
+		secret:       []byte(secret),
+		secureCookie: secureCookie,
+		ttl:          ttl,
 	}
 }
 
-// ValidateCredentials valida usuario y password admin.
+// ValidateCredentials valida email y password.
 //
 // Args:
-//   - username: usuario recibido.
+//   - c: contexto Fiber.
+//   - email: email recibido.
 //   - password: password recibido.
 //
 // Returns:
-//   - true si las credenciales coinciden.
-func (m *SessionManager) ValidateCredentials(username string, password string) bool {
-	userOK := subtle.ConstantTimeCompare([]byte(strings.TrimSpace(username)), []byte(m.username)) == 1
-	passOK := subtle.ConstantTimeCompare([]byte(password), []byte(m.password)) == 1
-	return userOK && passOK
+//   - Usuario de sesion, true si coincide o error.
+func (m *SessionManager) ValidateCredentials(c *fiber.Ctx, email string, password string) (SessionUser, bool, error) {
+	user, err := m.users.Authenticate(c.UserContext(), email, password)
+	if err != nil {
+		return SessionUser{}, false, err
+	}
+	return user.Session(), true, nil
 }
 
 // SetSession emite una cookie firmada.
 //
 // Args:
 //   - c: contexto Fiber.
+//   - userID: identificador autenticado.
 //
 // Returns:
 //   - Error si no pudo firmar la sesion.
-func (m *SessionManager) SetSession(c *fiber.Ctx) error {
-	expiresAt := time.Now().UTC().Add(sessionTTL)
-	value := m.sign(m.username, expiresAt)
+func (m *SessionManager) SetSession(c *fiber.Ctx, userID string) error {
+	expiresAt := time.Now().UTC().Add(m.ttl)
+	value := m.sign(userID, expiresAt)
 	c.Cookie(&fiber.Cookie{
 		Name:     sessionCookieName,
 		Value:    value,
 		Expires:  expiresAt,
 		HTTPOnly: true,
 		SameSite: fiber.CookieSameSiteLaxMode,
+		Secure:   m.secureCookie,
 		Path:     "/",
 	})
 	return nil
@@ -99,6 +104,7 @@ func (m *SessionManager) ClearSession(c *fiber.Ctx) {
 		Expires:  time.Now().Add(-time.Hour),
 		HTTPOnly: true,
 		SameSite: fiber.CookieSameSiteLaxMode,
+		Secure:   m.secureCookie,
 		Path:     "/",
 	})
 }
@@ -111,11 +117,15 @@ func (m *SessionManager) ClearSession(c *fiber.Ctx) {
 // Returns:
 //   - true si la sesion es valida.
 func (m *SessionManager) AuthenticateRequest(c *fiber.Ctx) bool {
-	username, ok := m.verify(c.Cookies(sessionCookieName))
+	userID, ok := m.verify(c.Cookies(sessionCookieName))
 	if !ok {
 		return false
 	}
-	c.Locals(LocalSessionUser, username)
+	user, err := m.users.FindSessionUser(c.UserContext(), userID)
+	if err != nil {
+		return false
+	}
+	c.Locals(LocalSessionUser, user)
 	return true
 }
 
@@ -127,13 +137,25 @@ func (m *SessionManager) AuthenticateRequest(c *fiber.Ctx) bool {
 // Returns:
 //   - true si existe sesion valida.
 func HasSession(c *fiber.Ctx) bool {
-	_, ok := c.Locals(LocalSessionUser).(string)
+	_, ok := c.Locals(LocalSessionUser).(SessionUser)
 	return ok
 }
 
-func (m *SessionManager) sign(username string, expiresAt time.Time) string {
+// CurrentUser devuelve el usuario autenticado.
+//
+// Args:
+//   - c: contexto Fiber.
+//
+// Returns:
+//   - Usuario de sesion y true si existe.
+func CurrentUser(c *fiber.Ctx) (SessionUser, bool) {
+	user, ok := c.Locals(LocalSessionUser).(SessionUser)
+	return user, ok
+}
+
+func (m *SessionManager) sign(userID string, expiresAt time.Time) string {
 	expires := strconv.FormatInt(expiresAt.Unix(), 10)
-	payload := base64.RawURLEncoding.EncodeToString([]byte(username)) + "." + expires
+	payload := base64.RawURLEncoding.EncodeToString([]byte(userID)) + "." + expires
 	signature := m.signature(payload)
 	return payload + "." + signature
 }
@@ -143,28 +165,20 @@ func (m *SessionManager) verify(value string) (string, bool) {
 	if len(parts) != 3 {
 		return "", false
 	}
-
 	payload := parts[0] + "." + parts[1]
 	expected := m.signature(payload)
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(parts[2])) != 1 {
 		return "", false
 	}
-
 	expiresUnix, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil || time.Now().UTC().After(time.Unix(expiresUnix, 0)) {
 		return "", false
 	}
-
-	rawUsername, err := base64.RawURLEncoding.DecodeString(parts[0])
+	rawUserID, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
 		return "", false
 	}
-	username := string(rawUsername)
-	if username != m.username {
-		return "", false
-	}
-
-	return username, true
+	return string(rawUserID), true
 }
 
 func (m *SessionManager) signature(payload string) string {

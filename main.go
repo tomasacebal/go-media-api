@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"log"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/tomasacebal/go-media-api/internal/auth"
 	"github.com/tomasacebal/go-media-api/internal/config"
+	"github.com/tomasacebal/go-media-api/internal/database"
 	"github.com/tomasacebal/go-media-api/internal/media"
 	"github.com/tomasacebal/go-media-api/internal/storage"
 	"github.com/tomasacebal/go-media-api/internal/web"
@@ -34,27 +36,62 @@ func main() {
 }
 
 func buildApp(cfg config.Config, logger *log.Logger) (*fiber.App, func() error, error) {
-	repo, closeRepo, err := media.NewSQLiteRepository(cfg.Media.SQLitePath)
+	defaultQuotaBytes := cfg.Product.DefaultQuotaBytes
+	if defaultQuotaBytes <= 0 {
+		defaultQuotaBytes = int64(10) * 1024 * 1024 * 1024
+	}
+	shareTTLDays := cfg.Product.ShareTTLDays
+	if shareTTLDays <= 0 {
+		shareTTLDays = 30
+	}
+
+	db, closeDB, err := database.OpenSQLite(cfg.Media.SQLitePath)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	keyRepo, closeKeyRepo, err := auth.NewSQLiteKeyRepository(cfg.Media.SQLitePath)
+	userRepo := auth.NewSQLiteUserRepository(db)
+	userService := auth.NewUserService(userRepo, defaultQuotaBytes, shareTTLDays)
+	admin, err := userService.EnsureBootstrapAdmin(
+		context.Background(),
+		cfg.Auth.AdminEmail,
+		cfg.Auth.AdminName,
+		cfg.Auth.AdminPassword,
+		defaultQuotaBytes,
+		shareTTLDays,
+	)
 	if err != nil {
-		_ = closeRepo()
+		_ = closeDB()
 		return nil, nil, err
 	}
+	if err := database.AssignLegacyOwnership(context.Background(), db, admin.ID); err != nil {
+		_ = closeDB()
+		return nil, nil, err
+	}
+
+	repo := media.NewSQLiteRepository(db)
+	keyRepo := auth.NewSQLiteKeyRepository(db)
 
 	storageProvider, err := storage.NewLocalProvider(cfg.Media.StoragePath, cfg.Media.PublicBaseURL)
 	if err != nil {
-		_ = closeKeyRepo()
-		_ = closeRepo()
+		_ = closeDB()
 		return nil, nil, err
 	}
 
 	app := fiber.New(fiber.Config{
 		BodyLimit:    requestBodyLimit(cfg.Media.MaxUploadBytes),
 		ErrorHandler: media.JSONErrorHandler,
+		ReadTimeout:  15 * time.Minute,
+		WriteTimeout: 15 * time.Minute,
+		IdleTimeout:  2 * time.Minute,
+	})
+
+	app.Use(func(c *fiber.Ctx) error {
+		c.Set("X-Content-Type-Options", "nosniff")
+		c.Set("X-Frame-Options", "DENY")
+		c.Set("Referrer-Policy", "no-referrer")
+		c.Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'")
+		return c.Next()
 	})
 
 	app.Use(func(c *fiber.Ctx) error {
@@ -69,22 +106,17 @@ func buildApp(cfg config.Config, logger *log.Logger) (*fiber.App, func() error, 
 	})
 
 	keyService := auth.NewAPIKeyService(keyRepo)
-	sessionManager := auth.NewSessionManager(cfg.Auth.AdminUsername, cfg.Auth.AdminPassword, cfg.Auth.SessionSecret)
-	authMiddleware := auth.NewMiddleware(sessionManager, keyService)
-	authHandler := auth.NewHandler(sessionManager, keyService, authMiddleware)
+	sessionManager := auth.NewSessionManager(userService, cfg.Auth.SessionSecret, cfg.Auth.CookieSecure, time.Duration(cfg.Auth.SessionTTLHours)*time.Hour)
+	authMiddleware := auth.NewMiddleware(sessionManager, keyService, userService)
+	authHandler := auth.NewHandler(sessionManager, userService, keyService, authMiddleware)
 	authHandler.RegisterRoutes(app)
 	registerBaseRoutes(app, cfg, authMiddleware)
-	mediaService := media.NewService(repo, storageProvider, cfg.Media.MaxUploadBytes, cfg.Media.PublicBaseURL)
+	mediaService := media.NewService(repo, storageProvider, userService, cfg.Media.MaxUploadBytes, cfg.Media.PublicBaseURL, shareTTLDays, cfg.Media.StoragePath)
 	mediaHandler := media.NewHandler(mediaService, logger, authMiddleware)
 	mediaHandler.RegisterRoutes(app)
 
 	cleanup := func() error {
-		keyErr := closeKeyRepo()
-		mediaErr := closeRepo()
-		if keyErr != nil {
-			return keyErr
-		}
-		return mediaErr
+		return closeDB()
 	}
 
 	return app, cleanup, nil
@@ -92,11 +124,33 @@ func buildApp(cfg config.Config, logger *log.Logger) (*fiber.App, func() error, 
 
 func registerBaseRoutes(app *fiber.App, cfg config.Config, authMiddleware *auth.Middleware) {
 	app.Get("/favicon.ico", func(c *fiber.Ctx) error {
-		return c.SendStatus(fiber.StatusNoContent)
+		c.Set("Content-Type", "image/x-icon")
+		c.Set(fiber.HeaderCacheControl, "public, max-age=31536000")
+		return c.Send(web.SDCardIcon)
+	})
+	app.Get("/favicon.svg", func(c *fiber.Ctx) error {
+		c.Set("Content-Type", "image/svg+xml")
+		c.Set(fiber.HeaderCacheControl, "public, max-age=31536000")
+		return c.SendString(web.SDCardSVG)
 	})
 
 	app.Get("/", authMiddleware.RequireSessionPage, func(c *fiber.Ctx) error {
-		return c.Type("html").SendString(web.GalleryHTML())
+		return c.Type("html").SendString(web.AppHTML())
+	})
+
+	app.Get("/assets/app.css", func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderCacheControl, "public, max-age=300")
+		return c.Type("css").SendString(web.AppCSS())
+	})
+
+	app.Get("/assets/app.js", func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderCacheControl, "public, max-age=300")
+		return c.Type("js").SendString(web.AppJS())
+	})
+
+	app.Get("/assets/share.js", func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderCacheControl, "public, max-age=300")
+		return c.Type("js").SendString(web.ShareJS())
 	})
 
 	app.Get("/health", func(c *fiber.Ctx) error {
@@ -107,7 +161,7 @@ func registerBaseRoutes(app *fiber.App, cfg config.Config, authMiddleware *auth.
 
 	app.Get("/info", func(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusOK).JSON(fiber.Map{
-			"name":    "go-media-api",
+			"name":    "AceTransfer",
 			"version": "dev",
 			"port":    cfg.Port,
 		})

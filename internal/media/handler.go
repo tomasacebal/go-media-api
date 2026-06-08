@@ -6,9 +6,11 @@ import (
 	"log"
 	"mime"
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/tomasacebal/go-media-api/internal/auth"
+	"github.com/tomasacebal/go-media-api/internal/web"
 )
 
 // Handler expone endpoints Fiber para media.
@@ -16,6 +18,7 @@ import (
 // Args:
 //   - service: servicio de media.
 //   - logger: logger de la aplicacion.
+//   - authMiddleware: guards de autenticacion.
 //
 // Returns:
 //   - Handler listo para registrar rutas.
@@ -46,159 +49,78 @@ func NewHandler(service *Service, logger *log.Logger, authMiddleware *auth.Middl
 // Returns:
 //   - No retorna valores.
 func (h *Handler) RegisterRoutes(app *fiber.App) {
-	app.Get("/api/v1/media", h.authMiddleware.RequireSessionOrAPIKey(auth.ScopeRead), h.List)
-	app.Post("/web/media/upload", h.authMiddleware.RequireSessionJSON, h.Upload)
-
-	group := app.Group("/api/v1/media")
-	group.Get("/", h.authMiddleware.RequireSessionOrAPIKey(auth.ScopeRead), h.List)
-	group.Post("/upload", h.authMiddleware.RequireAPIKey(auth.ScopeWrite), h.Upload)
-	group.Get("/:id", h.authMiddleware.RequireSessionOrAPIKey(auth.ScopeRead), h.Get)
-	group.Get("/:id/download", h.authMiddleware.OptionalSessionOrAPIKey(auth.ScopeRead), h.Download)
-	group.Delete("/:id", h.authMiddleware.RequireSessionOrAPIKey(auth.ScopeDelete), h.Delete)
+	h.registerFileRoutes(app)
+	h.registerTransferRoutes(app)
+	h.registerShareRoutes(app)
+	h.registerChunkedRoutes(app)
+	app.Get("/s/:code", h.SharePage)
+	app.Get("/s/:code/download", h.DownloadShare)
+	app.Get("/api/v1/public/shares/:code", h.PublicShare)
 }
 
-// Upload procesa un multipart upload.
+// SharePage devuelve la pagina publica de descarga.
 //
 // Args:
 //   - c: contexto Fiber.
 //
 // Returns:
-//   - Respuesta JSON con metadata o error.
-func (h *Handler) Upload(c *fiber.Ctx) error {
-	header, err := c.FormFile("file")
-	if err != nil {
-		return writeError(c, appError("media_file_required", "El campo file es obligatorio", ErrInvalidUpload))
-	}
-
-	file, err := h.service.Upload(c.UserContext(), header, UploadInput{
-		Visibility:  c.FormValue("visibility"),
-		Title:       c.FormValue("title"),
-		Description: c.FormValue("description"),
-		Category:    c.FormValue("category"),
-	})
-	if err != nil {
-		return writeError(c, err)
-	}
-
-	h.logger.Printf("media upload id=%s mime=%s size=%d visibility=%s", file.ID, file.MIMEType, file.SizeBytes, file.Visibility)
-
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-		"data": file,
-	})
+//   - HTML publico.
+func (h *Handler) SharePage(c *fiber.Ctx) error {
+	return c.Type("html").SendString(web.ShareHTML())
 }
 
-// List devuelve media activa para API y galeria web.
-//
-// Args:
-//   - c: contexto Fiber.
-//
-// Returns:
-//   - Respuesta JSON con lista de metadata o error.
-func (h *Handler) List(c *fiber.Ctx) error {
-	files, err := h.service.List(c.UserContext(), c.QueryInt("limit", 60))
-	if err != nil {
-		return writeError(c, err)
-	}
-
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"data": files,
-	})
+func actor(c *fiber.Ctx) (auth.SessionUser, bool) {
+	return auth.CurrentUser(c)
 }
 
-// Get devuelve metadata de media.
-//
-// Args:
-//   - c: contexto Fiber.
-//
-// Returns:
-//   - Respuesta JSON con metadata o error.
-func (h *Handler) Get(c *fiber.Ctx) error {
-	file, err := h.service.Get(c.UserContext(), c.Params("id"))
-	if err != nil {
-		return writeError(c, err)
-	}
-
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"data": file,
-	})
+func includeAll(c *fiber.Ctx, user auth.SessionUser) bool {
+	return user.IsAdmin() && strings.EqualFold(c.Query("all"), "true")
 }
 
-// Download sirve el archivo asociado a una media publica.
-//
-// Args:
-//   - c: contexto Fiber.
-//
-// Returns:
-//   - Stream del archivo o error JSON.
-func (h *Handler) Download(c *fiber.Ctx) error {
-	allowPrivate := auth.HasSession(c) || auth.HasAPIKey(c)
-	download, err := h.service.Download(c.UserContext(), c.Params("id"), allowPrivate)
-	if err != nil {
-		return writeError(c, err)
-	}
-
+func sendDownload(c *fiber.Ctx, download DownloadFile) error {
 	file := download.File
 	c.Set(fiber.HeaderContentType, file.MIMEType)
 	c.Set(fiber.HeaderContentLength, strconv.FormatInt(file.SizeBytes, 10))
-	c.Set(fiber.HeaderContentDisposition, mime.FormatMediaType("inline", map[string]string{
-		"filename": file.OriginalName,
-	}))
-	if file.Visibility == VisibilityPublic {
-		c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
-	} else {
-		c.Set(fiber.HeaderCacheControl, "no-store")
-	}
-
+	c.Set(fiber.HeaderContentDisposition, mime.FormatMediaType("attachment", map[string]string{"filename": file.OriginalName}))
+	c.Set(fiber.HeaderCacheControl, "no-store")
 	return c.SendStream(download.Reader, int(file.SizeBytes))
 }
 
-// Delete borra metadata y archivo fisico.
-//
-// Args:
-//   - c: contexto Fiber.
-//
-// Returns:
-//   - Estado 204 o error JSON.
-func (h *Handler) Delete(c *fiber.Ctx) error {
-	id := c.Params("id")
-	if err := h.service.Delete(c.UserContext(), id); err != nil {
-		return writeError(c, err)
+func writeError(c *fiber.Ctx, err error) error {
+	var quotaErr *QuotaCleanupRequiredError
+	if errors.As(err, &quotaErr) {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+			"error": fiber.Map{
+				"code":    "quota_cleanup_required",
+				"message": quotaErr.Error(),
+			},
+			"data": quotaErr.Preview,
+		})
 	}
 
-	h.logger.Printf("media delete id=%s", id)
-
-	return c.SendStatus(fiber.StatusNoContent)
-}
-
-func writeError(c *fiber.Ctx, err error) error {
 	status := fiber.StatusInternalServerError
 	code := "internal_error"
 	message := "Error interno"
-
 	var appErr *AppError
 	if errors.As(err, &appErr) {
 		code = appErr.Code
 		message = appErr.Message
 		status = statusForError(appErr.Err)
 	}
-
-	return c.Status(status).JSON(fiber.Map{
-		"error": fiber.Map{
-			"code":    code,
-			"message": message,
-		},
-	})
+	return c.Status(status).JSON(fiber.Map{"error": fiber.Map{"code": code, "message": message}})
 }
 
 func statusForError(err error) int {
 	switch {
-	case errors.Is(err, ErrFileTooLarge):
+	case errors.Is(err, ErrFileTooLarge), errors.Is(err, ErrFileExceedsQuota):
 		return fiber.StatusRequestEntityTooLarge
 	case errors.Is(err, ErrUnsupportedType):
 		return fiber.StatusUnsupportedMediaType
-	case errors.Is(err, ErrFileEmpty), errors.Is(err, ErrInvalidUpload), errors.Is(err, ErrInvalidVisibility):
+	case errors.Is(err, ErrFileEmpty), errors.Is(err, ErrInvalidUpload), errors.Is(err, ErrInvalidVisibility), errors.Is(err, ErrInvalidShare):
 		return fiber.StatusBadRequest
-	case errors.Is(err, ErrNotFound):
+	case errors.Is(err, ErrQuotaExceeded):
+		return fiber.StatusConflict
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrShareExpired):
 		return fiber.StatusNotFound
 	case errors.Is(err, ErrForbidden):
 		return fiber.StatusForbidden
@@ -218,17 +140,12 @@ func statusForError(err error) int {
 func JSONErrorHandler(c *fiber.Ctx, err error) error {
 	status := fiber.StatusInternalServerError
 	message := "Error interno"
-
 	var fiberErr *fiber.Error
 	if errors.As(err, &fiberErr) {
 		status = fiberErr.Code
 		message = fiberErr.Message
 	}
-
 	return c.Status(status).JSON(fiber.Map{
-		"error": fiber.Map{
-			"code":    fmt.Sprintf("http_%d", status),
-			"message": message,
-		},
+		"error": fiber.Map{"code": fmt.Sprintf("http_%d", status), "message": message},
 	})
 }

@@ -14,12 +14,14 @@ const LocalAPIKey = "api_key"
 // Args:
 //   - sessions: manager de sesiones web.
 //   - keys: servicio de api keys.
+//   - users: servicio de usuarios.
 //
 // Returns:
 //   - Middleware listo para proteger rutas.
 type Middleware struct {
 	sessions *SessionManager
 	keys     *APIKeyService
+	users    *UserService
 }
 
 // NewMiddleware crea los guards de auth.
@@ -27,23 +29,12 @@ type Middleware struct {
 // Args:
 //   - sessions: manager de sesiones web.
 //   - keys: servicio de api keys.
+//   - users: servicio de usuarios.
 //
 // Returns:
 //   - Middleware inicializado.
-func NewMiddleware(sessions *SessionManager, keys *APIKeyService) *Middleware {
-	return &Middleware{sessions: sessions, keys: keys}
-}
-
-// LoadSession carga la sesion si existe, sin exigirla.
-//
-// Args:
-//   - c: contexto Fiber.
-//
-// Returns:
-//   - Siguiente handler.
-func (m *Middleware) LoadSession(c *fiber.Ctx) error {
-	m.sessions.AuthenticateRequest(c)
-	return c.Next()
+func NewMiddleware(sessions *SessionManager, keys *APIKeyService, users *UserService) *Middleware {
+	return &Middleware{sessions: sessions, keys: keys, users: users}
 }
 
 // RequireSessionPage exige sesion y redirige a login si falta.
@@ -74,6 +65,24 @@ func (m *Middleware) RequireSessionJSON(c *fiber.Ctx) error {
 	return WriteAuthError(c, fiber.StatusUnauthorized, "auth_required", "Autenticacion requerida")
 }
 
+// RequireAdminJSON exige sesion admin.
+//
+// Args:
+//   - c: contexto Fiber.
+//
+// Returns:
+//   - Siguiente handler o error JSON.
+func (m *Middleware) RequireAdminJSON(c *fiber.Ctx) error {
+	if !m.sessions.AuthenticateRequest(c) {
+		return WriteAuthError(c, fiber.StatusUnauthorized, "auth_required", "Autenticacion requerida")
+	}
+	user, _ := CurrentUser(c)
+	if !user.IsAdmin() {
+		return WriteAuthError(c, fiber.StatusForbidden, "admin_required", "Admin requerido")
+	}
+	return c.Next()
+}
+
 // RequireAPIKey exige api key con un scope especifico.
 //
 // Args:
@@ -83,14 +92,12 @@ func (m *Middleware) RequireSessionJSON(c *fiber.Ctx) error {
 //   - Middleware Fiber.
 func (m *Middleware) RequireAPIKey(scope string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		key, ok, err := m.authenticateAPIKey(c, scope)
-		if err != nil {
+		if err := m.loadAPIKey(c, scope); err != nil {
 			return writeAPIKeyAuthError(c, err)
 		}
-		if !ok {
+		if !HasAPIKey(c) {
 			return WriteAuthError(c, fiber.StatusUnauthorized, "api_key_required", "Api key requerida")
 		}
-		c.Locals(LocalAPIKey, key)
 		return c.Next()
 	}
 }
@@ -107,15 +114,12 @@ func (m *Middleware) RequireSessionOrAPIKey(scope string) fiber.Handler {
 		if m.sessions.AuthenticateRequest(c) {
 			return c.Next()
 		}
-
-		key, ok, err := m.authenticateAPIKey(c, scope)
-		if err != nil {
+		if err := m.loadAPIKey(c, scope); err != nil {
 			return writeAPIKeyAuthError(c, err)
 		}
-		if !ok {
+		if !HasAPIKey(c) {
 			return WriteAuthError(c, fiber.StatusUnauthorized, "auth_required", "Autenticacion requerida")
 		}
-		c.Locals(LocalAPIKey, key)
 		return c.Next()
 	}
 }
@@ -132,19 +136,12 @@ func (m *Middleware) OptionalSessionOrAPIKey(scope string) fiber.Handler {
 		if m.sessions.AuthenticateRequest(c) {
 			return c.Next()
 		}
-
 		if extractAPIKey(c) == "" {
 			return c.Next()
 		}
-
-		key, ok, err := m.authenticateAPIKey(c, scope)
-		if err != nil {
+		if err := m.loadAPIKey(c, scope); err != nil {
 			return writeAPIKeyAuthError(c, err)
 		}
-		if !ok {
-			return WriteAuthError(c, fiber.StatusUnauthorized, "api_key_invalid", "Api key invalida")
-		}
-		c.Locals(LocalAPIKey, key)
 		return c.Next()
 	}
 }
@@ -173,25 +170,26 @@ func HasAPIKey(c *fiber.Ctx) bool {
 //   - Error Fiber serializado como JSON.
 func WriteAuthError(c *fiber.Ctx, status int, code string, message string) error {
 	return c.Status(status).JSON(fiber.Map{
-		"error": fiber.Map{
-			"code":    code,
-			"message": message,
-		},
+		"error": fiber.Map{"code": code, "message": message},
 	})
 }
 
-func (m *Middleware) authenticateAPIKey(c *fiber.Ctx, scope string) (APIKey, bool, error) {
+func (m *Middleware) loadAPIKey(c *fiber.Ctx, scope string) error {
 	raw := extractAPIKey(c)
 	if raw == "" {
-		return APIKey{}, false, nil
+		return nil
 	}
-
 	key, err := m.keys.Authenticate(c.UserContext(), raw, scope)
 	if err != nil {
-		return APIKey{}, false, err
+		return err
 	}
-
-	return key, true, nil
+	user, err := m.users.FindSessionUser(c.UserContext(), key.OwnerID)
+	if err != nil {
+		return err
+	}
+	c.Locals(LocalAPIKey, key)
+	c.Locals(LocalSessionUser, user)
+	return nil
 }
 
 func writeAPIKeyAuthError(c *fiber.Ctx, err error) error {

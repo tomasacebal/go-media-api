@@ -1,11 +1,8 @@
 package config
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -16,6 +13,10 @@ const (
 	defaultPublicBaseURL   = "http://localhost:8080"
 	defaultSQLiteStoreName = "metadata.sqlite"
 	defaultAdminUsername   = "admin"
+	defaultAdminName       = "Admin"
+	defaultQuotaGB         = 10
+	defaultShareTTLDays    = 30
+	defaultSessionTTLHours = 12
 )
 
 // Config contiene la configuracion general de la aplicacion.
@@ -26,9 +27,10 @@ const (
 // Returns:
 //   - Configuracion lista para inicializar Fiber y media.
 type Config struct {
-	Port  string
-	Media MediaConfig
-	Auth  AuthConfig
+	Port    string
+	Media   MediaConfig
+	Auth    AuthConfig
+	Product ProductConfig
 }
 
 // MediaConfig contiene la configuracion del modulo de media.
@@ -54,9 +56,26 @@ type MediaConfig struct {
 // Returns:
 //   - Valores para validar login y firmar sesiones.
 type AuthConfig struct {
-	AdminUsername string
-	AdminPassword string
-	SessionSecret string
+	AdminUsername   string
+	AdminEmail      string
+	AdminName       string
+	AdminPassword   string
+	SessionSecret   string
+	SessionTTLHours int
+	CookieSecure    bool
+}
+
+// ProductConfig contiene defaults comerciales de la aplicacion.
+//
+// Args:
+//   - No recibe argumentos.
+//
+// Returns:
+//   - Defaults usados para usuarios y links compartidos.
+type ProductConfig struct {
+	DefaultQuotaGB    int
+	DefaultQuotaBytes int64
+	ShareTTLDays      int
 }
 
 // Load lee variables de entorno y devuelve una configuracion validada.
@@ -84,6 +103,8 @@ func Load() (Config, error) {
 	}
 
 	adminUsername := envString("ADMIN_USERNAME", defaultAdminUsername)
+	adminEmail := envString("ADMIN_EMAIL", adminUsername)
+	adminName := envString("ADMIN_NAME", defaultAdminName)
 	adminPassword := envString("ADMIN_PASSWORD", "")
 	if adminPassword == "" {
 		return Config{}, fmt.Errorf("ADMIN_PASSWORD no puede estar vacia")
@@ -92,11 +113,28 @@ func Load() (Config, error) {
 	if len(sessionSecret) < 32 {
 		return Config{}, fmt.Errorf("SESSION_SECRET debe tener al menos 32 caracteres")
 	}
+	sessionTTLHours, err := envPositiveInt("SESSION_TTL_HOURS", defaultSessionTTLHours)
+	if err != nil {
+		return Config{}, err
+	}
+	cookieSecure, err := envBool("COOKIE_SECURE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	defaultQuotaGB, err := envPositiveInt("USER_DEFAULT_QUOTA_GB", defaultQuotaGB)
+	if err != nil {
+		return Config{}, err
+	}
+	shareTTLDays, err := envPositiveInt("SHARE_DEFAULT_TTL_DAYS", defaultShareTTLDays)
+	if err != nil {
+		return Config{}, err
+	}
 
 	maxUploadBytes := int64(0)
 	if maxUploadMB > 0 {
 		maxUploadBytes = int64(maxUploadMB) * 1024 * 1024
 	}
+	defaultQuotaBytes := int64(defaultQuotaGB) * 1024 * 1024 * 1024
 
 	return Config{
 		Port: port,
@@ -108,146 +146,18 @@ func Load() (Config, error) {
 			SQLitePath:     filepath.Join(storagePath, defaultSQLiteStoreName),
 		},
 		Auth: AuthConfig{
-			AdminUsername: adminUsername,
-			AdminPassword: adminPassword,
-			SessionSecret: sessionSecret,
+			AdminUsername:   adminUsername,
+			AdminEmail:      adminEmail,
+			AdminName:       adminName,
+			AdminPassword:   adminPassword,
+			SessionSecret:   sessionSecret,
+			SessionTTLHours: sessionTTLHours,
+			CookieSecure:    cookieSecure,
+		},
+		Product: ProductConfig{
+			DefaultQuotaGB:    defaultQuotaGB,
+			DefaultQuotaBytes: defaultQuotaBytes,
+			ShareTTLDays:      shareTTLDays,
 		},
 	}, nil
-}
-
-func envString(key string, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	return value
-}
-
-func envPositiveInt(key string, fallback int) (int, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback, nil
-	}
-
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return 0, fmt.Errorf("%s debe ser un entero positivo", key)
-	}
-
-	return value, nil
-}
-
-func loadDotEnvFiles() error {
-	paths := []string{".env"}
-	executablePath, err := os.Executable()
-	if err == nil {
-		executableDotEnv := filepath.Join(filepath.Dir(executablePath), ".env")
-		if !samePath(".env", executableDotEnv) {
-			paths = append(paths, executableDotEnv)
-		}
-	}
-
-	for _, path := range paths {
-		if err := loadDotEnv(path); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func loadDotEnv(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("leer %s: %w", path, err)
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	lineNumber := 0
-	for scanner.Scan() {
-		lineNumber++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			return fmt.Errorf(".env linea %d invalida", lineNumber)
-		}
-
-		key = strings.TrimSpace(key)
-		if key == "" {
-			return fmt.Errorf(".env linea %d sin clave", lineNumber)
-		}
-		if _, exists := os.LookupEnv(key); exists {
-			continue
-		}
-
-		parsedValue, err := parseDotEnvValue(strings.TrimSpace(value), lineNumber)
-		if err != nil {
-			return err
-		}
-		if err := os.Setenv(key, parsedValue); err != nil {
-			return fmt.Errorf("setear %s desde .env: %w", key, err)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("leer %s: %w", path, err)
-	}
-
-	return nil
-}
-
-func parseDotEnvValue(value string, lineNumber int) (string, error) {
-	if value == "" {
-		return "", nil
-	}
-
-	if strings.HasPrefix(value, `"`) {
-		parsedValue, err := strconv.Unquote(value)
-		if err != nil {
-			return "", fmt.Errorf(".env linea %d tiene comillas invalidas", lineNumber)
-		}
-		return parsedValue, nil
-	}
-	if strings.HasPrefix(value, "'") {
-		if !strings.HasSuffix(value, "'") || len(value) == 1 {
-			return "", fmt.Errorf(".env linea %d tiene comillas invalidas", lineNumber)
-		}
-		return strings.TrimSuffix(strings.TrimPrefix(value, "'"), "'"), nil
-	}
-
-	if commentIndex := strings.Index(value, " #"); commentIndex >= 0 {
-		value = value[:commentIndex]
-	}
-	return strings.TrimSpace(value), nil
-}
-
-func samePath(left string, right string) bool {
-	leftAbs, leftErr := filepath.Abs(left)
-	rightAbs, rightErr := filepath.Abs(right)
-	if leftErr != nil || rightErr != nil {
-		return filepath.Clean(left) == filepath.Clean(right)
-	}
-	return strings.EqualFold(filepath.Clean(leftAbs), filepath.Clean(rightAbs))
-}
-
-func envNonNegativeInt(key string, fallback int) (int, error) {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback, nil
-	}
-
-	value, err := strconv.Atoi(raw)
-	if err != nil || value < 0 {
-		return 0, fmt.Errorf("%s debe ser un entero mayor o igual a cero", key)
-	}
-
-	return value, nil
 }

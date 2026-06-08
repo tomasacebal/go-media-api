@@ -8,10 +8,11 @@ import (
 	"github.com/tomasacebal/go-media-api/internal/web"
 )
 
-// Handler expone rutas de login y api keys.
+// Handler expone rutas de login, cuenta, usuarios y api keys.
 //
 // Args:
 //   - sessions: manager de sesiones.
+//   - users: servicio de usuarios.
 //   - keys: servicio de api keys.
 //   - middleware: guards de auth.
 //
@@ -19,6 +20,7 @@ import (
 //   - Handler listo para registrar rutas.
 type Handler struct {
 	sessions   *SessionManager
+	users      *UserService
 	keys       *APIKeyService
 	middleware *Middleware
 }
@@ -27,16 +29,17 @@ type Handler struct {
 //
 // Args:
 //   - sessions: manager de sesiones.
+//   - users: servicio de usuarios.
 //   - keys: servicio de api keys.
 //   - middleware: guards de auth.
 //
 // Returns:
 //   - Handler inicializado.
-func NewHandler(sessions *SessionManager, keys *APIKeyService, middleware *Middleware) *Handler {
-	return &Handler{sessions: sessions, keys: keys, middleware: middleware}
+func NewHandler(sessions *SessionManager, users *UserService, keys *APIKeyService, middleware *Middleware) *Handler {
+	return &Handler{sessions: sessions, users: users, keys: keys, middleware: middleware}
 }
 
-// RegisterRoutes registra login, logout y api keys.
+// RegisterRoutes registra rutas de auth y cuenta.
 //
 // Args:
 //   - app: instancia Fiber.
@@ -47,13 +50,10 @@ func (h *Handler) RegisterRoutes(app *fiber.App) {
 	app.Get("/login", h.LoginPage)
 	app.Post("/login", h.Login)
 	app.Post("/logout", h.middleware.RequireSessionJSON, h.Logout)
-	app.Get("/api/v1/api-keys", h.middleware.RequireSessionJSON, h.ListAPIKeys)
-	app.Post("/api/v1/api-keys", h.middleware.RequireSessionJSON, h.CreateAPIKey)
-
-	group := app.Group("/api/v1/api-keys", h.middleware.RequireSessionJSON)
-	group.Get("/", h.ListAPIKeys)
-	group.Post("/", h.CreateAPIKey)
-	group.Delete("/:id", h.RevokeAPIKey)
+	app.Get("/api/v1/me", h.middleware.RequireSessionJSON, h.Me)
+	app.Post("/api/v1/account/password", h.middleware.RequireSessionJSON, h.ChangePassword)
+	h.registerAPIKeyRoutes(app)
+	h.registerUserRoutes(app)
 }
 
 // LoginPage devuelve el formulario de login.
@@ -78,30 +78,37 @@ func (h *Handler) LoginPage(c *fiber.Ctx) error {
 // Returns:
 //   - JSON o redirect segun Accept.
 func (h *Handler) Login(c *fiber.Ctx) error {
-	username := c.FormValue("username")
+	email := c.FormValue("email")
+	if email == "" {
+		email = c.FormValue("username")
+	}
 	password := c.FormValue("password")
 	if strings.Contains(c.Get(fiber.HeaderContentType), fiber.MIMEApplicationJSON) {
 		var input struct {
+			Email    string `json:"email"`
 			Username string `json:"username"`
 			Password string `json:"password"`
 		}
 		if err := c.BodyParser(&input); err == nil {
-			username = input.Username
+			email = input.Email
+			if email == "" {
+				email = input.Username
+			}
 			password = input.Password
 		}
 	}
 
-	if !h.sessions.ValidateCredentials(username, password) {
+	user, ok, err := h.sessions.ValidateCredentials(c, email, password)
+	if !ok || err != nil {
 		return WriteAuthError(c, fiber.StatusUnauthorized, "login_failed", "Credenciales invalidas")
 	}
-	if err := h.sessions.SetSession(c); err != nil {
+	if err := h.sessions.SetSession(c, user.ID); err != nil {
 		return WriteAuthError(c, fiber.StatusInternalServerError, "session_failed", "No se pudo crear la sesion")
 	}
-
 	if acceptsHTML(c) {
 		return c.Redirect("/", fiber.StatusSeeOther)
 	}
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{"data": fiber.Map{"ok": true}})
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"data": user})
 }
 
 // Logout cierra la sesion web.
@@ -116,70 +123,38 @@ func (h *Handler) Logout(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{"data": fiber.Map{"ok": true}})
 }
 
-// ListAPIKeys devuelve api keys activas.
+// Me devuelve la cuenta autenticada.
 //
 // Args:
 //   - c: contexto Fiber.
 //
 // Returns:
-//   - JSON con api keys sin secretos.
-func (h *Handler) ListAPIKeys(c *fiber.Ctx) error {
-	keys, err := h.keys.List(c.UserContext())
-	if err != nil {
-		return WriteAuthError(c, fiber.StatusInternalServerError, "api_keys_list_failed", "No se pudieron listar las api keys")
-	}
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{"data": keys})
+//   - Usuario autenticado.
+func (h *Handler) Me(c *fiber.Ctx) error {
+	user, _ := CurrentUser(c)
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"data": user})
 }
 
-// CreateAPIKey crea una api key.
+// ChangePassword actualiza el password propio.
 //
 // Args:
 //   - c: contexto Fiber.
 //
 // Returns:
-//   - JSON con api key y secreto visible una sola vez.
-func (h *Handler) CreateAPIKey(c *fiber.Ctx) error {
+//   - JSON de confirmacion o error.
+func (h *Handler) ChangePassword(c *fiber.Ctx) error {
 	var input struct {
-		Name   string   `json:"name"`
-		Scopes []string `json:"scopes"`
+		CurrentPassword string `json:"current_password"`
+		NextPassword    string `json:"next_password"`
 	}
-
-	if strings.Contains(c.Get(fiber.HeaderContentType), fiber.MIMEApplicationJSON) {
-		if err := c.BodyParser(&input); err != nil {
-			return WriteAuthError(c, fiber.StatusBadRequest, "api_key_invalid_payload", "Payload invalido")
-		}
-	} else {
-		input.Name = c.FormValue("name")
-		input.Scopes = splitRequestedScopes(c.FormValue("scopes"))
+	if err := c.BodyParser(&input); err != nil {
+		return WriteAuthError(c, fiber.StatusBadRequest, "password_invalid_payload", "Payload invalido")
 	}
-
-	key, err := h.keys.Create(c.UserContext(), input.Name, input.Scopes)
-	if err != nil {
-		if errors.Is(err, ErrInvalidScope) {
-			return WriteAuthError(c, fiber.StatusBadRequest, "api_key_invalid_scopes", "Scopes invalidos")
-		}
-		return WriteAuthError(c, fiber.StatusInternalServerError, "api_key_create_failed", "No se pudo crear la api key")
+	user, _ := CurrentUser(c)
+	if err := h.users.ChangePassword(c.UserContext(), user.ID, input.CurrentPassword, input.NextPassword); err != nil {
+		return WriteAuthError(c, fiber.StatusBadRequest, "password_change_failed", "No se pudo cambiar el password")
 	}
-
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"data": key})
-}
-
-// RevokeAPIKey revoca una api key.
-//
-// Args:
-//   - c: contexto Fiber.
-//
-// Returns:
-//   - Estado 204 o error JSON.
-func (h *Handler) RevokeAPIKey(c *fiber.Ctx) error {
-	if err := h.keys.Revoke(c.UserContext(), c.Params("id")); err != nil {
-		if errors.Is(err, ErrAPIKeyNotFound) {
-			return WriteAuthError(c, fiber.StatusNotFound, "api_key_not_found", "Api key no encontrada")
-		}
-		return WriteAuthError(c, fiber.StatusInternalServerError, "api_key_revoke_failed", "No se pudo revocar la api key")
-	}
-
-	return c.SendStatus(fiber.StatusNoContent)
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{"data": fiber.Map{"ok": true}})
 }
 
 func acceptsHTML(c *fiber.Ctx) bool {
@@ -200,4 +175,11 @@ func splitRequestedScopes(value string) []string {
 		}
 	}
 	return scopes
+}
+
+func authStatusForError(err error) int {
+	if errors.Is(err, ErrUserNotFound) {
+		return fiber.StatusNotFound
+	}
+	return fiber.StatusBadRequest
 }
